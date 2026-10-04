@@ -4,7 +4,9 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 
-app.secret_key = "change-this-secret-key-later"
+import os
+
+app.secret_key = os.environ.get("SECRET_KEY", "dev-only-secret")
 
 DATABASE = "adreward.db"
 
