@@ -1,50 +1,36 @@
 import os
+import sqlite3
 import hmac
 import hashlib
-import sqlite3
+from functools import wraps
+from urllib.parse import urlencode
 
-from flask import (
-    Flask,
-    request,
-    redirect,
-    url_for,
-    session,
-    render_template_string
-)
-
-from werkzeug.security import (
-    generate_password_hash,
-    check_password_hash
-)
+from flask import Flask, request, redirect, url_for, session, render_template_string
+from werkzeug.security import generate_password_hash, check_password_hash
 
 
 app = Flask(__name__)
 
-# Use the production secret from Render.
-# The fallback is only for local development.
-app.secret_key = os.environ.get(
-    "SECRET_KEY",
-    "dev-only-secret-change-this"
-)
-
-DB_NAME = "adreward.db"
+app.secret_key = os.environ.get("SECRET_KEY", "dev-only-secret")
 
 
-# --------------------------------------------------
+# ============================================================
 # DATABASE
-# --------------------------------------------------
+# ============================================================
+
+DATABASE = "adreward.db"
+
 
 def get_db():
-    con = sqlite3.connect(DB_NAME)
-    con.row_factory = sqlite3.Row
-    return con
+    db = sqlite3.connect(DATABASE)
+    db.row_factory = sqlite3.Row
+    return db
 
 
 def init_db():
-    con = get_db()
-    cur = con.cursor()
+    db = get_db()
 
-    cur.execute("""
+    db.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
@@ -53,7 +39,7 @@ def init_db():
         )
     """)
 
-    cur.execute("""
+    db.execute("""
         CREATE TABLE IF NOT EXISTS transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -63,148 +49,229 @@ def init_db():
         )
     """)
 
-    con.commit()
-    con.close()
+    db.commit()
+    db.close()
 
 
-# --------------------------------------------------
+init_db()
+
+
+# ============================================================
+# LOGIN REQUIRED
+# ============================================================
+
+def login_required(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if "user_id" not in session:
+            return redirect(url_for("login"))
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
+# ============================================================
+# BASIC HTML STYLE
+# ============================================================
+
+BASE_STYLE = """
+<style>
+    * {
+        box-sizing: border-box;
+    }
+
+    body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        background: #f5f7fb;
+        color: #222;
+    }
+
+    .container {
+        max-width: 1000px;
+        margin: 40px auto;
+        padding: 20px;
+    }
+
+    .card {
+        background: white;
+        border-radius: 14px;
+        padding: 25px;
+        margin-bottom: 20px;
+        box-shadow: 0 5px 20px rgba(0,0,0,0.08);
+    }
+
+    h1, h2, h3 {
+        margin-top: 0;
+    }
+
+    input {
+        width: 100%;
+        padding: 12px;
+        margin: 8px 0 15px;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        font-size: 15px;
+    }
+
+    button,
+    .btn {
+        display: inline-block;
+        padding: 12px 18px;
+        background: #111827;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        text-decoration: none;
+        cursor: pointer;
+        font-size: 15px;
+    }
+
+    .btn-primary {
+        background: #2563eb;
+    }
+
+    .btn-success {
+        background: #16a34a;
+    }
+
+    .btn-danger {
+        background: #dc2626;
+    }
+
+    .nav {
+        background: #111827;
+        padding: 15px 20px;
+    }
+
+    .nav a {
+        color: white;
+        text-decoration: none;
+        margin-right: 20px;
+    }
+
+    .points {
+        font-size: 38px;
+        font-weight: bold;
+        color: #2563eb;
+    }
+
+    .error {
+        background: #fee2e2;
+        color: #991b1b;
+        padding: 12px;
+        border-radius: 8px;
+        margin-bottom: 15px;
+    }
+
+    .success {
+        background: #dcfce7;
+        color: #166534;
+        padding: 12px;
+        border-radius: 8px;
+        margin-bottom: 15px;
+    }
+
+    table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    th, td {
+        padding: 12px;
+        border-bottom: 1px solid #eee;
+        text-align: left;
+    }
+
+    .offerwall {
+        width: 100%;
+        height: 750px;
+        border: none;
+        border-radius: 12px;
+    }
+
+    .muted {
+        color: #666;
+    }
+</style>
+"""
+
+
+# ============================================================
 # HOME / DASHBOARD
-# --------------------------------------------------
+# ============================================================
 
 @app.route("/")
+@login_required
 def home():
 
-    if "user_id" not in session:
-        return redirect(url_for("login"))
+    db = get_db()
 
-    con = get_db()
-
-    user = con.execute(
+    user = db.execute(
         "SELECT * FROM users WHERE id = ?",
         (session["user_id"],)
     ).fetchone()
 
-    con.close()
+    db.close()
 
-    if not user:
-        session.clear()
-        return redirect(url_for("login"))
-
-    return render_template_string("""
-<!DOCTYPE html>
-<html>
-<head>
-    <title>AdReward</title>
-
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background: #f4f6f8;
-            margin: 0;
-            padding: 40px;
-        }
-
-        .container {
-            max-width: 600px;
-            margin: auto;
-        }
-
-        .card {
-            background: white;
-            padding: 25px;
-            border-radius: 15px;
-            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
-            margin-bottom: 20px;
-        }
-
-        h1 {
-            margin-top: 0;
-        }
-
-        .points {
-            font-size: 35px;
-            font-weight: bold;
-        }
-
-        a, button {
-            display: inline-block;
-            padding: 12px 18px;
-            margin: 5px 5px 5px 0;
-            border-radius: 8px;
-            text-decoration: none;
-            border: none;
-            cursor: pointer;
-            background: #111;
-            color: white;
-        }
-
-        .secondary {
-            background: #777;
-        }
-    </style>
-</head>
-
-<body>
-
-<div class="container">
-
-    <div class="card">
-
-        <h1>AdReward</h1>
-
-        <p>
-            Welcome, <strong>{{ user["username"] }}</strong>
-        </p>
-
-        <p>Your balance:</p>
-
-        <div class="points">
-            {{ user["points"] }} points
+    return render_template_string(
+        BASE_STYLE + """
+        <div class="nav">
+            <a href="{{ url_for('home') }}">Dashboard</a>
+            <a href="{{ url_for('offers') }}">View Offers</a>
+            <a href="{{ url_for('history') }}">Transaction History</a>
+            <a href="{{ url_for('logout') }}">Logout</a>
         </div>
 
-    </div>
+        <div class="container">
+
+            <div class="card">
+                <h1>Welcome, {{ user["username"] }}</h1>
+
+                <p>Your current balance:</p>
+
+                <div class="points">
+                    {{ "%.2f"|format(user["points"]) }} Points
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Earn Points</h2>
+
+                <p>
+                    Complete available offers and receive points
+                    after the offer provider confirms the completion.
+                </p>
+
+                <a class="btn btn-primary"
+                   href="{{ url_for('offers') }}">
+                    View Offers
+                </a>
+            </div>
+
+            <div class="card">
+                <h2>Transaction History</h2>
+
+                <a class="btn"
+                   href="{{ url_for('history') }}">
+                    View History
+                </a>
+            </div>
+
+        </div>
+        """,
+        user=user
+    )
 
 
-    <div class="card">
-
-        <h2>Earn Rewards</h2>
-
-        <p>
-            Complete available offers and earn rewards.
-        </p>
-
-        <a href="/offers">
-            View Offers
-        </a>
-
-        <a href="/history" class="secondary">
-            Transaction History
-        </a>
-
-    </div>
-
-
-    <div class="card">
-
-        <a href="/logout" class="secondary">
-            Logout
-        </a>
-
-    </div>
-
-</div>
-
-</body>
-</html>
-    """, user=user)
-
-
-# --------------------------------------------------
+# ============================================================
 # REGISTER
-# --------------------------------------------------
+# ============================================================
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
+
+    error = None
 
     if request.method == "POST":
 
@@ -212,260 +279,190 @@ def register():
         password = request.form.get("password", "")
 
         if not username or not password:
-            return """
-                <h2>Username and password are required.</h2>
-                <a href="/register">Go back</a>
-            """
+            error = "Username and password are required."
 
-        if len(username) < 3:
-            return """
-                <h2>Username must be at least 3 characters.</h2>
-                <a href="/register">Go back</a>
-            """
+        elif len(username) < 3:
+            error = "Username must be at least 3 characters."
 
-        if len(password) < 6:
-            return """
-                <h2>Password must be at least 6 characters.</h2>
-                <a href="/register">Go back</a>
-            """
+        elif len(password) < 6:
+            error = "Password must be at least 6 characters."
 
-        hashed_password = generate_password_hash(password)
+        else:
 
-        con = get_db()
+            db = get_db()
 
-        try:
+            existing = db.execute(
+                "SELECT id FROM users WHERE username = ?",
+                (username,)
+            ).fetchone()
 
-            cur = con.execute(
-                """
-                INSERT INTO users (username, password)
-                VALUES (?, ?)
-                """,
-                (username, hashed_password)
-            )
+            if existing:
+                error = "Username already exists."
+                db.close()
 
-            user_id = cur.lastrowid
+            else:
 
-            con.commit()
+                hashed_password = generate_password_hash(password)
 
-        except sqlite3.IntegrityError:
+                db.execute(
+                    """
+                    INSERT INTO users (username, password, points)
+                    VALUES (?, ?, 0)
+                    """,
+                    (username, hashed_password)
+                )
 
-            con.close()
+                db.commit()
 
-            return """
-                <h2>Username already exists.</h2>
-                <a href="/register">Try another username</a>
-            """
+                user = db.execute(
+                    "SELECT id FROM users WHERE username = ?",
+                    (username,)
+                ).fetchone()
 
-        con.close()
+                db.close()
 
-        session["user_id"] = user_id
+                session["user_id"] = user["id"]
 
-        return redirect(url_for("home"))
+                return redirect(url_for("home"))
 
-    return """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Register - AdReward</title>
+    return render_template_string(
+        BASE_STYLE + """
+        <div class="container">
 
-    <style>
-        body {
-            font-family: Arial;
-            background: #f4f6f8;
-            padding: 40px;
-        }
+            <div class="card">
 
-        .box {
-            max-width: 400px;
-            margin: auto;
-            background: white;
-            padding: 30px;
-            border-radius: 15px;
-        }
+                <h1>Create Account</h1>
 
-        input {
-            width: 100%;
-            box-sizing: border-box;
-            padding: 12px;
-            margin: 8px 0;
-        }
+                {% if error %}
+                    <div class="error">{{ error }}</div>
+                {% endif %}
 
-        button {
-            width: 100%;
-            padding: 12px;
-            background: #111;
-            color: white;
-            border: none;
-            border-radius: 8px;
-        }
+                <form method="POST">
 
-        a {
-            display: block;
-            margin-top: 15px;
-        }
-    </style>
-</head>
+                    <label>Username</label>
+                    <input
+                        type="text"
+                        name="username"
+                        required
+                    >
 
-<body>
+                    <label>Password</label>
+                    <input
+                        type="password"
+                        name="password"
+                        required
+                    >
 
-<div class="box">
+                    <button type="submit">
+                        Register
+                    </button>
 
-    <h1>Create Account</h1>
+                </form>
 
-    <form method="POST">
+                <br>
 
-        <input
-            type="text"
-            name="username"
-            placeholder="Username"
-            required
-        >
+                <p>
+                    Already have an account?
+                    <a href="{{ url_for('login') }}">
+                        Login
+                    </a>
+                </p>
 
-        <input
-            type="password"
-            name="password"
-            placeholder="Password"
-            required
-        >
+            </div>
 
-        <button type="submit">
-            Register
-        </button>
-
-    </form>
-
-    <a href="/login">
-        Already have an account? Login
-    </a>
-
-</div>
-
-</body>
-</html>
-    """
+        </div>
+        """,
+        error=error
+    )
 
 
-# --------------------------------------------------
+# ============================================================
 # LOGIN
-# --------------------------------------------------
+# ============================================================
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+
+    error = None
 
     if request.method == "POST":
 
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
 
-        con = get_db()
+        db = get_db()
 
-        user = con.execute(
+        user = db.execute(
             "SELECT * FROM users WHERE username = ?",
             (username,)
         ).fetchone()
 
-        con.close()
+        db.close()
 
-        if user and check_password_hash(
-            user["password"],
-            password
-        ):
+        if user and check_password_hash(user["password"], password):
 
             session["user_id"] = user["id"]
 
             return redirect(url_for("home"))
 
-        return """
-            <h2>Invalid username or password.</h2>
-            <a href="/login">Try again</a>
-        """
+        error = "Invalid username or password."
 
-    return """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Login - AdReward</title>
+    return render_template_string(
+        BASE_STYLE + """
+        <div class="container">
 
-    <style>
-        body {
-            font-family: Arial;
-            background: #f4f6f8;
-            padding: 40px;
-        }
+            <div class="card">
 
-        .box {
-            max-width: 400px;
-            margin: auto;
-            background: white;
-            padding: 30px;
-            border-radius: 15px;
-        }
+                <h1>Login</h1>
 
-        input {
-            width: 100%;
-            box-sizing: border-box;
-            padding: 12px;
-            margin: 8px 0;
-        }
+                {% if error %}
+                    <div class="error">{{ error }}</div>
+                {% endif %}
 
-        button {
-            width: 100%;
-            padding: 12px;
-            background: #111;
-            color: white;
-            border: none;
-            border-radius: 8px;
-        }
+                <form method="POST">
 
-        a {
-            display: block;
-            margin-top: 15px;
-        }
-    </style>
-</head>
+                    <label>Username</label>
 
-<body>
+                    <input
+                        type="text"
+                        name="username"
+                        required
+                    >
 
-<div class="box">
+                    <label>Password</label>
 
-    <h1>Login</h1>
+                    <input
+                        type="password"
+                        name="password"
+                        required
+                    >
 
-    <form method="POST">
+                    <button type="submit">
+                        Login
+                    </button>
 
-        <input
-            type="text"
-            name="username"
-            placeholder="Username"
-            required
-        >
+                </form>
 
-        <input
-            type="password"
-            name="password"
-            placeholder="Password"
-            required
-        >
+                <br>
 
-        <button type="submit">
-            Login
-        </button>
+                <p>
+                    Don't have an account?
+                    <a href="{{ url_for('register') }}">
+                        Register
+                    </a>
+                </p>
 
-    </form>
+            </div>
 
-    <a href="/register">
-        Create an account
-    </a>
-
-</div>
-
-</body>
-</html>
-    """
+        </div>
+        """,
+        error=error
+    )
 
 
-# --------------------------------------------------
+# ============================================================
 # LOGOUT
-# --------------------------------------------------
+# ============================================================
 
 @app.route("/logout")
 def logout():
@@ -475,328 +472,321 @@ def logout():
     return redirect(url_for("login"))
 
 
-# --------------------------------------------------
-# OFFERS
-# --------------------------------------------------
+# ============================================================
+# OFFERWALL
+# ============================================================
 
 @app.route("/offers")
+@login_required
 def offers():
 
-    if "user_id" not in session:
-        return redirect(url_for("login"))
-
-    user_id = session["user_id"]
-
-    # Offerwall public key will be added later.
     public_key = os.environ.get("OFFERWALL_PUBLIC_KEY")
+    secret_key = os.environ.get("OFFERWALL_SECRET")
 
     if not public_key:
+        return render_template_string(
+            BASE_STYLE + """
+            <div class="container">
+                <div class="card">
+                    <h1>Available Offers</h1>
 
-        return """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Offers - AdReward</title>
-</head>
+                    <div class="error">
+                        Offerwall public key is not configured.
+                    </div>
 
-<body>
+                    <a class="btn"
+                       href="{{ url_for('home') }}">
+                        Back to Dashboard
+                    </a>
+                </div>
+            </div>
+            """
+        )
 
-<h1>Offers</h1>
+    if not secret_key:
+        return render_template_string(
+            BASE_STYLE + """
+            <div class="container">
+                <div class="card">
+                    <h1>Available Offers</h1>
 
-<p>
-    The offerwall has not been configured yet.
-</p>
+                    <div class="error">
+                        Offerwall secret key is not configured.
+                    </div>
 
-<p>
-    We will connect Offerwall.GG after the publisher account
-    and placement are approved.
-</p>
+                    <p class="muted">
+                        Add OFFERWALL_SECRET to the Render
+                        environment variables before using
+                        signed Offerwall links.
+                    </p>
 
-<a href="/">
-    Back to Dashboard
-</a>
+                    <a class="btn"
+                       href="{{ url_for('home') }}">
+                        Back to Dashboard
+                    </a>
+                </div>
+            </div>
+            """
+        )
 
-</body>
-</html>
-        """
+    user_id = str(session["user_id"])
 
-    # We will replace this section with the exact
-    # Offerwall.GG integration URL after receiving
-    # the current placement/public-key details.
+    # Parameters required by Offerwall.GG
+    params = {
+        "appId": public_key,
+        "userId": user_id
+    }
 
-    return """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Offers - AdReward</title>
-</head>
+    # Sort parameters alphabetically before signing.
+    sorted_params = sorted(params.items())
 
-<body>
+    canonical = urlencode(sorted_params)
 
-<h1>Available Offers</h1>
+    signature = hmac.new(
+        secret_key.encode("utf-8"),
+        canonical.encode("utf-8"),
+        hashlib.sha256
+    ).hexdigest()
 
-<p>
-    Offerwall integration is ready for configuration.
-</p>
+    # User-facing Offerwall URL
+    wall_params = {
+        "userId": user_id,
+        "signature": signature
+    }
 
-<a href="/">
-    Back to Dashboard
-</a>
-
-</body>
-</html>
-    """
-
-
-# --------------------------------------------------
-# TEMPORARY TEST REWARD
-# --------------------------------------------------
-
-@app.route("/watch")
-def watch():
-
-    if "user_id" not in session:
-        return redirect(url_for("login"))
-
-    return """
-<!DOCTYPE html>
-<html>
-
-<head>
-    <title>Test Reward</title>
-
-    <script>
-
-        let seconds = 5;
-
-        function countdown() {
-
-            document.getElementById("timer").innerText =
-                seconds;
-
-            if (seconds <= 0) {
-
-                document.getElementById("claim")
-                    .style.display = "block";
-
-                document.getElementById("timer")
-                    .innerText = "Complete";
-
-                return;
-            }
-
-            seconds--;
-
-            setTimeout(countdown, 1000);
-        }
-
-        window.onload = countdown;
-
-    </script>
-
-</head>
-
-<body>
-
-<h1>Test Advertisement</h1>
-
-<p>
-    This is only a development test.
-</p>
-
-<p>
-    Time remaining:
-    <strong id="timer">5</strong>
-</p>
-
-<a
-    id="claim"
-    href="/claim"
-    style="display:none;"
->
-    Claim 10 Test Points
-</a>
-
-</body>
-
-</html>
-    """
-
-
-@app.route("/claim")
-def claim():
-
-    if "user_id" not in session:
-        return redirect(url_for("login"))
-
-    user_id = session["user_id"]
-
-    con = get_db()
-
-    con.execute(
-        """
-        UPDATE users
-        SET points = points + 10
-        WHERE id = ?
-        """,
-        (user_id,)
+    wall_url = (
+        "https://offerwall.gg/wall/"
+        + public_key
+        + "?"
+        + urlencode(wall_params)
     )
 
-    con.execute(
+    return render_template_string(
+        BASE_STYLE + """
+        <div class="nav">
+            <a href="{{ url_for('home') }}">Dashboard</a>
+            <a href="{{ url_for('history') }}">
+                Transaction History
+            </a>
+            <a href="{{ url_for('logout') }}">Logout</a>
+        </div>
+
+        <div class="container">
+
+            <div class="card">
+
+                <h1>Available Offers</h1>
+
+                <p class="muted">
+                    Complete eligible offers to earn points.
+                    Rewards are credited after the offer provider
+                    confirms the completion.
+                </p>
+
+                <iframe
+                    class="offerwall"
+                    src="{{ wall_url }}"
+                    title="Offerwall">
+                </iframe>
+
+            </div>
+
+        </div>
+        """,
+        wall_url=wall_url
+    )
+
+
+# ============================================================
+# DEVELOPMENT TEST REWARD
+# ============================================================
+#
+# This is ONLY for local/development testing.
+# It should NOT be used as a real advertising reward system.
+#
+
+@app.route("/watch")
+@login_required
+def watch():
+
+    return render_template_string(
+        BASE_STYLE + """
+        <div class="container">
+
+            <div class="card">
+
+                <h1>Test Reward</h1>
+
+                <p>
+                    This page is for development testing only.
+                </p>
+
+                <form method="POST"
+                      action="{{ url_for('claim') }}">
+
+                    <button
+                        class="btn btn-success"
+                        type="submit">
+                        Add Test Points
+                    </button>
+
+                </form>
+
+                <br>
+
+                <a class="btn"
+                   href="{{ url_for('home') }}">
+                    Back
+                </a>
+
+            </div>
+
+        </div>
+        """
+    )
+
+
+@app.route("/claim", methods=["POST"])
+@login_required
+def claim():
+
+    # Development-only reward.
+    test_points = 10
+
+    db = get_db()
+
+    db.execute(
+        """
+        UPDATE users
+        SET points = points + ?
+        WHERE id = ?
+        """,
+        (test_points, session["user_id"])
+    )
+
+    db.execute(
         """
         INSERT INTO transactions
         (user_id, points, reason)
         VALUES (?, ?, ?)
         """,
         (
-            user_id,
-            10,
+            session["user_id"],
+            test_points,
             "Development test reward"
         )
     )
 
-    con.commit()
-    con.close()
+    db.commit()
+    db.close()
 
     return redirect(url_for("home"))
 
 
-# --------------------------------------------------
+# ============================================================
 # TRANSACTION HISTORY
-# --------------------------------------------------
+# ============================================================
 
 @app.route("/history")
+@login_required
 def history():
 
-    if "user_id" not in session:
-        return redirect(url_for("login"))
+    db = get_db()
 
-    con = get_db()
-
-    transactions = con.execute(
+    transactions = db.execute(
         """
         SELECT *
         FROM transactions
         WHERE user_id = ?
-        ORDER BY created_at DESC
+        ORDER BY id DESC
         """,
         (session["user_id"],)
     ).fetchall()
 
-    con.close()
+    db.close()
 
-    return render_template_string("""
-<!DOCTYPE html>
-<html>
+    return render_template_string(
+        BASE_STYLE + """
+        <div class="nav">
+            <a href="{{ url_for('home') }}">Dashboard</a>
+            <a href="{{ url_for('offers') }}">View Offers</a>
+            <a href="{{ url_for('logout') }}">Logout</a>
+        </div>
 
-<head>
+        <div class="container">
 
-    <title>Transaction History</title>
+            <div class="card">
 
-    <style>
+                <h1>Transaction History</h1>
 
-        body {
-            font-family: Arial;
-            background: #f4f6f8;
-            padding: 40px;
-        }
+                {% if transactions %}
 
-        .box {
-            max-width: 700px;
-            margin: auto;
-            background: white;
-            padding: 25px;
-            border-radius: 15px;
-        }
+                <table>
 
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Points</th>
+                            <th>Reason</th>
+                        </tr>
+                    </thead>
 
-        th, td {
-            padding: 12px;
-            border-bottom: 1px solid #ddd;
-            text-align: left;
-        }
+                    <tbody>
 
-        a {
-            display: inline-block;
-            margin-top: 20px;
-        }
+                    {% for transaction in transactions %}
 
-    </style>
+                        <tr>
 
-</head>
+                            <td>
+                                {{ transaction["created_at"] }}
+                            </td>
 
-<body>
+                            <td>
+                                {{ "%.2f"|format(transaction["points"]) }}
+                            </td>
 
-<div class="box">
+                            <td>
+                                {{ transaction["reason"] }}
+                            </td>
 
-    <h1>Transaction History</h1>
+                        </tr>
 
-    {% if transactions %}
+                    {% endfor %}
 
-    <table>
+                    </tbody>
 
-        <tr>
-            <th>Points</th>
-            <th>Reason</th>
-            <th>Date</th>
-        </tr>
+                </table>
 
-        {% for transaction in transactions %}
+                {% else %}
 
-        <tr>
+                    <p class="muted">
+                        No transactions yet.
+                    </p>
 
-            <td>
-                {{ transaction["points"] }}
-            </td>
+                {% endif %}
 
-            <td>
-                {{ transaction["reason"] }}
-            </td>
+            </div>
 
-            <td>
-                {{ transaction["created_at"] }}
-            </td>
-
-        </tr>
-
-        {% endfor %}
-
-    </table>
-
-    {% else %}
-
-    <p>No transactions yet.</p>
-
-    {% endif %}
-
-    <a href="/">
-        Back to Dashboard
-    </a>
-
-</div>
-
-</body>
-
-</html>
-    """, transactions=transactions)
+        </div>
+        """,
+        transactions=transactions
+    )
 
 
-# --------------------------------------------------
-# OFFERWALL SERVER-TO-SERVER CALLBACK
-# --------------------------------------------------
+# ============================================================
+# OFFERWALL CALLBACK / POSTBACK
+# ============================================================
 
 @app.route("/offerwall/callback", methods=["GET", "POST"])
 def offerwall_callback():
 
-    data = (
-        request.args
-        if request.method == "GET"
-        else request.form
-    )
+    secret_key = os.environ.get("OFFERWALL_SECRET")
+
+    if not secret_key:
+        return "Server configuration error", 500
+
+    # Offerwall.GG supports GET/POST postbacks.
+    data = request.args if request.method == "GET" else request.form
 
     user_id = data.get("userId", "")
     transaction_id = data.get("transactionId", "")
@@ -805,114 +795,83 @@ def offerwall_callback():
     status = data.get("status", "")
     test = data.get("test", "0")
 
-    secret = os.environ.get("OFFERWALL_SECRET")
+    # Required fields
+    if not user_id or not transaction_id or not amount or not signature:
+        return "Missing parameters", 400
 
-    # Secret has not been configured yet.
-    if not secret:
-        return "Server not configured", 500
+    # Never credit dashboard test callbacks.
+    if test == "1":
+        return "TEST OK", 200
 
-    if not user_id or not transaction_id:
-        return "BAD REQUEST", 400
+    # Validate numeric amount.
+    try:
+        amount_value = float(amount)
+    except ValueError:
+        return "Invalid amount", 400
 
-    if not signature:
-        return "FORBIDDEN", 403
-
-    # --------------------------------------------------
-    # IMPORTANT:
-    # The exact signature construction must match the
-    # current Offerwall.GG documentation.
+    # Offerwall.GG signature:
     #
-    # We will verify this against their current
-    # callback documentation before enabling production
-    # credits.
-    # --------------------------------------------------
-
+    # HMAC-SHA256(
+    #     userId:transactionId:currencyAmount,
+    #     secretKey
+    # )
+    #
     message = f"{user_id}:{transaction_id}:{amount}"
 
     expected_signature = hmac.new(
-        secret.encode("utf-8"),
+        secret_key.encode("utf-8"),
         message.encode("utf-8"),
         hashlib.sha256
     ).hexdigest()
 
+    # Constant-time comparison.
     if not hmac.compare_digest(
-        expected_signature,
-        signature
+        signature.lower(),
+        expected_signature.lower()
     ):
-        return "FORBIDDEN", 403
+        return "Invalid signature", 403
 
-    # Provider test callbacks must never create
-    # real user rewards.
-    if test == "1":
-        return "OK", 200
+    db = get_db()
 
-    try:
-        amount = float(amount)
-    except (TypeError, ValueError):
-        return "BAD AMOUNT", 400
-
-    con = get_db()
-
-    user = con.execute(
-        """
-        SELECT id
-        FROM users
-        WHERE id = ?
-        """,
-        (user_id,)
-    ).fetchone()
-
-    if not user:
-
-        con.close()
-
-        return "USER NOT FOUND", 404
-
-    # Prevent duplicate callback processing.
-    transaction_reason = (
-        f"Offerwall:{transaction_id}:{status}"
-    )
-
-    existing = con.execute(
+    # Idempotency:
+    # Don't process the same transaction twice.
+    existing = db.execute(
         """
         SELECT id
         FROM transactions
-        WHERE user_id = ?
-        AND reason = ?
+        WHERE reason = ?
         """,
-        (
-            user_id,
-            transaction_reason
-        )
+        (f"Offerwall transaction {transaction_id}",)
     ).fetchone()
 
     if existing:
+        db.close()
+        return "Already processed", 200
 
-        con.close()
+    # Positive amount = credit.
+    # Negative amount = reversal.
+    points = amount_value
 
-        return "OK", 200
-
-    # Temporary conversion:
-    # 1 provider currency unit = 1 platform point.
-    #
-    # We will replace this with the actual
-    # owner/user revenue split after confirming
-    # the provider's exact payout format.
-    points = amount
-
-    con.execute(
+    db.execute(
         """
         UPDATE users
         SET points = points + ?
         WHERE id = ?
         """,
-        (
-            points,
-            user_id
-        )
+        (points, user_id)
     )
 
-    con.execute(
+    # Make sure the user actually exists.
+    if db.total_changes == 0:
+        db.close()
+        return "User not found", 404
+
+    reason = f"Offerwall transaction {transaction_id}"
+
+    if status == "reversed":
+        reason = f"Offerwall reversal {transaction_id}"
+
+    db.execute(
         """
         INSERT INTO transactions
         (user_id, points, reason)
@@ -921,30 +880,36 @@ def offerwall_callback():
         (
             user_id,
             points,
-            transaction_reason
+            reason
         )
     )
 
-    con.commit()
-    con.close()
+    db.commit()
+    db.close()
 
     return "OK", 200
 
 
-# --------------------------------------------------
-# STARTUP
-# --------------------------------------------------
+# ============================================================
+# HEALTH CHECK
+# ============================================================
 
-# IMPORTANT:
-# Gunicorn imports this file, so database initialization
-# must happen outside the __main__ block.
-init_db()
+@app.route("/health")
+def health():
 
+    return "OK", 200
+
+
+# ============================================================
+# RUN LOCALLY
+# ============================================================
 
 if __name__ == "__main__":
 
+    port = int(os.environ.get("PORT", 5000))
+
     app.run(
         host="0.0.0.0",
-        port=5000,
-        debug=True
+        port=port,
+        debug=False
     )
